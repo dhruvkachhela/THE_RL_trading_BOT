@@ -1,0 +1,93 @@
+# ============================================================
+#  Advanced RL Trading Agent — Training Configuration
+# ============================================================
+
+# ── File Paths ──────────────────────────────────────────────
+data:
+  training_data:   "data/trainalt_data.csv"
+  entry_points:    "data/deflection_data.csv"
+  model_save_path: "models/"
+  results_path:    "results/"
+
+# ── Environment ─────────────────────────────────────────────
+environment:
+  max_trade_steps:   10
+  lookback_window:   20         # longer context
+  state_columns:
+    - "sto_osc"
+    - "macd"
+    - "adx"
+    - "obv"
+    - "n_atr"
+    - "log_ret"
+    - "newsapi"
+    - "rsi"                     # NEW
+    - "bb_pct"                  # NEW  Bollinger %B
+    - "volume_ratio"            # NEW  vol / 20-bar avg
+  ema_alpha_norm:   0.05
+  initial_tp:       0.03
+  initial_sl:       -0.03
+  tp_sl_width:      0.03
+  slippage_bps:     5
+  transaction_cost: 0.0015
+
+# ── Model Architecture ───────────────────────────────────────
+model:
+  sequence_length:  20          # must match lookback_window
+  hidden_dim:       256         # wider than original 128
+  n_heads:          4           # transformer attention heads
+  n_transformer_layers: 2
+  dropout:          0.1
+  action_values: [-0.07,-0.06,-0.05,-0.04,-0.03,-0.02,-0.01,
+                   0.0,
+                   0.01,0.02,0.03,0.04,0.05,0.06,0.07]
+
+# ── SAC Hyperparameters ──────────────────────────────────────
+agent:
+  learning_rate:          0.0001
+  gamma:                  0.99
+  tau:                    0.005
+  target_entropy_factor:  0.98
+  initial_log_alpha:      -1.6094379124341003   # log(0.2)
+  n_step_returns:         3                      # multi-step TD
+  grad_clip:              1.0                    # gradient clipping
+  update_every:           1                      # steps between updates
+  updates_per_step:       1
+
+# ── Risk Management ──────────────────────────────────────────
+risk:
+  max_drawdown_limit:    0.15    # halt training episode if drawdown > 15%
+  position_sizing:       true    # agent also outputs position size
+  kelly_fraction:        0.25    # fractional Kelly for sizing
+  max_position_pct:      0.5     # max 50% of capital per trade
+  risk_free_rate:        0.04    # annualised, for Sharpe calc
+
+# ── Replay Buffer ────────────────────────────────────────────
+replay_buffer:
+  capacity:         200000
+  per_alpha:        0.6
+  per_beta_start:   0.4
+  per_beta_end:     1.0
+  per_beta_frames:  100000       # anneal beta over N frames
+
+# ── Training ─────────────────────────────────────────────────
+training:
+  episodes:         500
+  batch_size:       128
+  warmup_steps:     1000         # random actions before training
+  save_frequency:   50
+  eval_frequency:   10           # evaluate every N episodes
+  eval_episodes:    5
+
+# ── Reward Shaping ───────────────────────────────────────────
+reward:
+  type:            "sharpe"      # options: shaped | sharpe | sortino
+  window:          20            # rolling window for ratio rewards
+  lambda_entropy:  0.01          # extra entropy bonus
+
+# ── Logging ──────────────────────────────────────────────────
+logging:
+  log_level:      "INFO"
+  tensorboard:    true
+  log_dir:        "logs/"
+  save_plots:     true
