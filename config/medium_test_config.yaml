@@ -1,0 +1,93 @@
+# ============================================================
+#  Advanced RL Trading Agent — Medium Test Configuration
+#  Balanced for reasonable training time & meaningful results
+# ============================================================
+
+# ── File Paths ──────────────────────────────────────────────
+data:
+  training_data:   "data/trainalt_data.csv"
+  entry_points:    "data/deflection_data.csv"
+  model_save_path: "models/"
+  results_path:    "results/"
+
+# ── Environment ─────────────────────────────────────────────
+environment:
+  max_trade_steps:   10
+  lookback_window:   20
+  state_columns:
+    - "sto_osc"
+    - "macd"
+    - "adx"
+    - "obv"
+    - "n_atr"
+    - "log_ret"
+    - "newsapi"
+    - "rsi"
+    - "bb_pct"
+    - "volume_ratio"
+  ema_alpha_norm:   0.05
+  initial_tp:       0.03
+  initial_sl:       -0.03
+  tp_sl_width:      0.03
+  slippage_bps:     5
+  transaction_cost: 0.0015
+
+# ── Model Architecture ───────────────────────────────────────
+model:
+  sequence_length:  20
+  hidden_dim:       128         # Medium size
+  n_heads:          4
+  n_transformer_layers: 2
+  dropout:          0.1
+  action_values: [-0.07,-0.06,-0.05,-0.04,-0.03,-0.02,-0.01,
+                   0.0,
+                   0.01,0.02,0.03,0.04,0.05,0.06,0.07]
+
+# ── SAC Hyperparameters ──────────────────────────────────────
+agent:
+  learning_rate:          0.0003
+  gamma:                  0.99
+  tau:                    0.005
+  target_entropy_factor:  0.98
+  initial_log_alpha:      -1.6094379124341003   # log(0.2)
+  n_step_returns:         3
+  grad_clip:              1.0
+  update_every:           1
+  updates_per_step:       1
+
+# ── Risk Management ──────────────────────────────────────────
+risk:
+  max_drawdown_limit:    0.15
+  position_sizing:       true
+  kelly_fraction:        0.25
+  max_position_pct:      0.5
+  risk_free_rate:        0.04
+
+# ── Replay Buffer ────────────────────────────────────────────
+replay_buffer:
+  capacity:         50000       # Medium capacity
+  per_alpha:        0.6
+  per_beta_start:   0.4
+  per_beta_end:     1.0
+  per_beta_frames:  50000
+
+# ── Training ─────────────────────────────────────────────────
+training:
+  episodes:         50          # Reasonable number for testing
+  batch_size:       128
+  warmup_steps:     500         # Decent warmup
+  save_frequency:   10
+  eval_frequency:   5           # Evaluate every 5 episodes
+
+# ── Reward Shaping ───────────────────────────────────────────
+reward:
+  type:            "sharpe"
+  window:          20
+  lambda_entropy:  0.01
+
+# ── Logging ──────────────────────────────────────────────────
+logging:
+  log_level:      "INFO"
+  tensorboard:    true
+  log_dir:        "logs/"
+  save_plots:     true

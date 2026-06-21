@@ -1,0 +1,74 @@
+SIMPLE NETWORK ARCHITECTURE DIAGRAM
+====================================
+
+INPUT: [Batch, Seq_Len=20, Features=16]  (Market data)
+          │
+          ▼
+TEMPORAL FEATURE EXTRACTOR
+          │
+          ├─ STAGE 1: Multi-scale CNN (Kernel-3 & 5)
+          │     → [Batch, T, Hidden_Dim]
+          │
+          ├─ STAGE 2: Bidirectional LSTM (2 layers)
+          │     → [Batch, T, Hidden_Dim]
+          │
+          ├─ STAGE 3: Transformer Encoder
+          │     │
+          │     ├─ Prepend CLS token: [Batch, T+1, Hidden_Dim]
+          │     ├─ Add PositionalEncoding
+          │     │     PE(pos,2i)   = sin(pos / 10000^(2i/d_model))
+          │     │     PE(pos,2i+1) = cos(pos / 10000^(2i/d_model))
+          │     └─ Transformer (2 layers, 4 heads)
+          │         → [Batch, T+1, Hidden_Dim]
+          │
+          └─ Extract CLS token: [Batch, Hidden_Dim=256]  ← SHARED FEATURES
+                                                                     │
+          ┌───────────────────────────────┬───────────────────────────────┐
+          ▼                               ▼                               ▼
+   ACTOR NETWORK                   CRITIC NETWORK                    (Shared)
+          │                               │                                  │
+   ┌────────┴────────┐          ┌────────┴────────┐                  │
+   │                 │          │                 │                  │
+   ▼                 ▼          ▼                 ▼                  │
+ACTION HEAD      SIZE HEAD   DUELING HEAD      (Twin Critics)        │
+[17 logits]   [1 size]    ┌───────┴───────┐          │                  │
+│                 │       │ Value Stream  │          │                  │
+└───────┬───────┘       │   V(s) → [1]    │          │                  │
+        │               │ Advantage       │          │                  │
+        ▼               │   A(s,a) → [17] │          │                  │
+[17] TP/SL     [1] Pos   └───────┬───────┘          │                  │
+Displacement  Size [0,1]        │                    │                  │
+                             ▼                    │                  │
+                    Q(s,a) = V + A - mean(A)      │                  │
+                             │                    │                  │
+                             ▼                    │                  │
+                       [17] Q-values             │                  │
+                             │                    │                  │
+                             └────────────────────┘
+                         (Twin networks for reduced overestimation)
+
+KEY DIMENSIONS:
+- Input: [B, 20, 16]
+- After CNN: [B, 20, 128] (Hidden_Dim//2 × 2 kernels)
+- After BiLSTM: [B, 20, 128]
+- After Transformer: [B, 21, 128] (+1 for CLS token)
+- CLS output: [B, 128] → projected to Hidden_Dim=256 in heads
+- Action logits: [B, 17] (discrete TP/SL actions)
+- Position size: [B, 1] (continuous [0,1])
+- Q-values: [B, 17] (one per action)
+
+FLOW:
+1. Market data → TemporalFeatureExtractor → 256-dim features
+2. Features → Actor:
+   - Action Head → TP/SL displacement logits (17 actions)
+   - Size Head → Position size fraction [0,1]
+3. Features → Critic (Twin Dueling):
+   - Value Stream → State value V(s) [1]
+   - Advantage Stream → Action advantages [17]
+   - Combine: Q(s,a) = V(s) + A(s,a) - mean(A)
+
+POSITIONAL ENCODING:
+Added to transformer input before self-attention:
+PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+Where: pos = position, i = dimension, d_model = hidden size

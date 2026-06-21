@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/backtest.py config/training_config.yaml models/best_model.pth 10000)",
+      "Bash(grep *)",
+      "Bash(python *)",
+      "Bash(timeout 30 bash *)",
+      "Bash(timeout 5 bash *)",
+      "Bash(pkill -f \"python scripts/train.py\")"
+    ]
+  }
+}

@@ -180,7 +180,7 @@ class AdvancedSACAgent:
         self.critic_scheduler.step()
 
         # Update PER priorities
-        replay_buffer.update_priorities(indices, td_errors.cpu().numpy().flatten())
+        replay_buffer.update_priorities(indices, td_errors.detach().cpu().numpy().flatten())
 
         # ── Actor update ────────────────────────────────────────
         actor_loss, entropy = self._actor_loss(states, alpha)
@@ -295,7 +295,7 @@ class AdvancedSACAgent:
             "log_alpha":       self.log_alpha.item(),
             "update_count":    self.update_count,
         }, path)
-        print(f"[SAC] Saved checkpoint → {path}")
+        print(f"[SAC] Saved checkpoint -> {path}")
 
     def load(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.device)

@@ -272,7 +272,7 @@ class Trainer:
         print(
             f"  Ep {ep:4d} | Sharpe {sharpe:+.3f} | Return {ret:+.4f} | "
             f"Equity {eq:.4f} | DD {dd:.2%} | Trades {trades:3d} | WR {wr:.1%} | "
-            f"α {self.agent.alpha:.4f} | Reason: {reason}"
+            f"alpha {self.agent.alpha:.4f} | Reason: {reason}"
         )
 
         # ── JSON log (for monitor.py) ────────────────────────────

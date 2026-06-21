@@ -1,0 +1,336 @@
+NETWORK CONNECTIONS DIAGRAM
+===========================
+
+This diagram shows how information flows between components using ASCII art.
+
+LEGEND:
+========
+[ ] = Tensor/Shape
+→ = Data flow
+↔ = Shared/component reuse
+↓ = Processing/transformation
+|| = Concatenation
+∑ = Summation/Aggregation
+⊖ = Subtraction
+⊗ = Element-wise operation
+
+MAIN ARCHITECTURE FLOW
+=====================
+
+INPUT: Market Data
+       [Batch, 20, 16]  ← Online EMA normalized features
+               │
+               ▼
+TEMPORAL FEATURE EXTRACTOR (SHARED BACKBONE)
+       ┌─────────────────────────────┐
+       │  STAGE 1: CNN               │
+       │  [B,16,20] → [B,256,20]     │
+       │  (Kernels 3&5 concat)       │
+       │                             │
+       │  STAGE 2: BiLSTM            │
+       │  [B,20,256] → [B,20,256]    │
+       │  (2 layers, bidirectional)  │
+       │                             │
+       │  STAGE 3: TRANSFORMER       │
+       │  [B,20,256]                 │
+       │  └Prepend CLS: [B,1,256]    │
+       │  └Concat:   [B,21,256]      │
+       │  └+PosEnc:  [B,21,256]      │
+       │  └Trans(2L,4H):[B,21,256]   │
+       │  └Extract CLS:[B,256]       │
+       └─────────────────────────────┘
+               │
+               ▼
+     SHARED FEATURES: [B, 256]
+               │
+     ┌─────────┼─────────┐
+     ▼         ▼         ▼
+ACTOR NETWORK          CRITIC NETWORK
+     │                 │
+  ┌─┴─┐             ┌─┴─┐
+  │   │             │   │
+  ▼   ▼             ▼   ▼
+[ACTION HEAD]    [DUELING HEAD] ← Twin Critics
+     │                 │
+ ┌───┴────┐      ┌────┴────┐
+ │        │      │         │
+ ▼        ▼      ▼         ▼
+[LOGITS] [SIZE] [VALUE] [ADVANTAGE]
+ [B,17] [B,1]  [B,1]   [B,17]
+   │        │      │         │
+   │        ▼      │         │
+   │   [0,1] SIZE  │         │
+   │               │         │
+   └───────┬───────┘         │
+           │                 │
+           ▼                 ▼
+       [B,17]           [B,17]
+    ACTION         Q-VALUES
+   LOGITS         (PER ACTION)
+                 │
+                 ▼
+              COMBINE
+              Q = V + A - mean(A)
+                 │
+                 ▼
+           [B,17] FINAL Q-VALUES
+
+DETAILED COMPONENT VIEW
+=======================
+
+1. TEMPORAL FEATURE EXTRACTOR
+   --------------------------
+   INPUT: [B, 20, 16]
+
+   ┌─CNN STAGE─┐
+   │ [B,16,20] │input permute
+   │   │       │
+   │   ▼       ▼
+   │ Conv1D(3) Conv1D(5)  ← Parallel kernels
+   │   │       │
+   │   ▼       ▼
+   │  GeLU     GeLU        │
+   │   │       │
+   │   └───┬───┘
+   │       │ CONCAT
+   │       ▼
+   │   [B,256,20]          │
+   │   │                   │
+   │   ▼                   │
+   │ LayerNorm + Dropout   │
+   │   │                   │
+   │   ▼                   │
+   │ [B,20,256] ← permute back │
+   └─────────┴─────────┘
+            │
+            ▼
+   ┌─BiLSTM STAGE─┐
+   │ [B,20,256]   │input
+   │     │        │
+   │     ▼        │
+   │ BiLSTM(2L)   │ ← Bidirectional, 2 layers
+   │     │        │
+   │     ▼        │
+   │ [B,20,256]   │output
+   │     │        │
+   │     ▼        │
+   │ LayerNorm    │
+   │     │        │
+   │     ▼        │
+   │ [B,20,256]   │
+   └─────────┴────┘
+            │
+            ▼
+   ┌─TRANSFORMER STAGE─┐
+   │ [B,20,256]        │input
+   │     │             │
+   │     ▼             │
+   │ Prepend CLS token │[B,1,256] ← learnable
+   │     │             │
+   │     ▼             │
+   │ Concat: [B,21,256]│
+   │     │             │
+   │     ▼             │
+   │ PositionalEncoding│
+   │ PE(pos,2i)=sin(pos/10000^(2i/d)) │
+   │ PE(pos,2i+1)=cos(pos/10000^(2i/d))│
+   │     ▼             │
+   │ [B,21,256]        │
+   │     │             │
+   │     ▼             │
+   │ Transformer Encoder│
+   │ (2 layers, 4 heads)│
+   │     │             │
+   │     ▼             │
+   │ [B,21,256]        │
+   │     │             │
+   │     ▼             │
+   │ Extract CLS token │[B,1,256] ← position 0
+   │     │             │
+   │     ▼             │
+   │ [B,256]           │OUTPUT
+   └───────────────────┘
+
+2. DUELING HEAD (in Critic)
+   ------------------------
+   INPUT: [B, 256] (shared features)
+
+   ┌─────────────┐
+   │             │
+   │             ▼
+   │    ┌────────────────┐
+   │    │ Value Stream   │
+   │    │ (V(s))         │
+   │    │                │
+   │    │ Linear 256→256 │
+   │    │ LayerNorm      │
+   │    │ GeLU           │
+   │    │ Dropout        │
+   │    │ Linear 256→1   │
+   │    │                │
+   │    └──────┬────────┘
+   │           │ [B,1]
+   │           ▼
+   │    ┌────────────────┐
+   │    │ Advantage      │
+   │    │ Stream (A(s,a))│
+   │    │                │
+   │    │ Linear 256→256 │
+   │    │ LayerNorm      │
+   │    │ GeLU           │
+   │    │ Dropout        │
+   │    │ Linear 256→17  │
+   │    │                │
+   │    └──────┬────────┘
+   │           │ [B,17]
+   │           ▼
+   │    ┌────────────────┐
+   │    │     MEAN       │
+   │    │  over actions  │
+   │    └──────┬────────┘
+   │           │ [B,1]
+   │           ▼
+   │    ┌────────────────┐
+   │    │   SUBTRACT     │
+   │    │  V + A - mean  │
+   │    └──────┬────────┘
+   │           │ [B,17]
+   │           ▼
+   │    FINAL Q-VALUES  │
+   │    [B,17]          │
+   │                    │
+   └────────────────────┘
+
+3. ACTOR NETWORK
+   --------------
+   INPUT: [B, 256] (shared features)
+
+   ┌─────────────┐
+   │             │
+   │     ┌────────────────┐
+   │     │ Action Head    │
+   │     │                │
+   │     │ Linear 256→256 │
+   │     │ LayerNorm      │
+   │     │ GeLU           │
+   │     │ Dropout        │
+   │     │ Linear 256→17  │
+   │     │                │
+   │     └──────┬────────┘
+   │            │ [B,17] logits
+   │            ▼
+   │     ACTION LOGITS    │
+   │     [B,17]           │
+   │     │                │
+   │     ▼                │
+   │  Categorical dist.   │
+   │  → sample/argmax     │
+   │     │                │
+   │     ▼                │
+   │  action_idx (0-16)   │
+   │     │                │
+   │     ▼                │
+   │  action_value        │
+   │    from action_values│
+   │     [action_idx]     │
+   │     │                │
+   │     ▼                │
+   │  TP/SL displacement  │
+   │     │                │
+   │     ▼                │
+   │  Used in env.step()  │
+   └───────┬──────────────┘
+           │
+           ▼
+   ┌────────────────┐
+   │                │
+   │     ┌────────────────┐
+   │     │   Size Head    │
+   │     │ (if enabled)   │
+   │     │                │
+   │     │ Linear 256→128 │
+   │     │ GeLU           │
+   │     │ Linear 128→1   │
+   │     │ Sigmoid        │
+   │     │                │
+   │     └──────┬────────┘
+   │            │ [B,1] ∈ [0,1]
+   │            ▼
+   │     POSITION SIZE    │
+   │     fraction of cap  │
+   │     │                │
+   │     ▼                │
+   │  Used in env.step()  │
+   └────────────────────┘
+
+DATA FLOW EXAMPLE (batch_size=1 for simplicity)
+==============================================
+
+STEP 1: Get market state
+    state = [20, 16]  # numpy array from environment
+    state_tensor = [1, 20, 16]  # torch tensor with batch dim
+
+STEP 2: Feature extraction
+    features = TemporalFeatureExtractor(state_tensor)
+    # features = [1, 256]
+
+STEP 3: Actor forward pass
+    action_logits, position_size = Actor(features)
+    # action_logits = [1, 17]  (raw scores for each action)
+    # position_size = [1, 1]   (value between 0 and 1)
+
+STEP 4: Action selection
+    probs = softmax(action_logits)  # [1, 17]
+    action_idx = sample(Categorical(probs))  # scalar 0-16
+    action_value = action_values[action_idx]  # float from [-0.07,...,0.07]
+    pos_size_float = position_size.item()  # float [0,1]
+
+STEP 5: Environment step
+    next_state, reward, done, info = env.step(action_value, pos_size_float)
+
+STEP 6: Critic evaluation (for training)
+    q_values = Critic(features)  # [1, 17]
+    # Q-value for taken action:
+    q_taken = q_values[0, action_idx]  # scalar
+
+STEP 7: Learning (simplified)
+    # Actor loss: -log(prob) * advantage
+    # Critic loss: (q_taken - target)^2
+    # Alpha loss: entropy tuning
+
+KEY CONNECTIONS TO REMEMBER
+==========================
+
+1. WEIGHT SHARING:
+   - Actor and Critic share the TemporalFeatureExtractor backbone
+   - This means features learned for action selection also inform value estimation
+   - More parameter efficient and encourages coherent representations
+
+2. INFORMATION FLOW:
+   Market → Features → (Actor → Actions)  │
+                                   ↘      │
+                                    Critic → Values
+   The Critic evaluates how good the Actor's chosen actions are
+
+3. POSITIONAL ENCODING ROLE:
+   - Added BEFORE transformer self-attention
+   - Allows transformer to distinguish temporal order
+   - Critical for learning patterns like "this indicator combo 5 steps ago means X, but 15 steps ago means Y"
+
+4. DUELING ARCHITECTURE BENEFIT:
+   - Separates "How good is this market state?" (V(s))
+   - From "How much better is each specific action?" (A(s,a))
+   - Especially useful when many actions have similar value (common in ranging markets)
+
+5. N-STEP RETURNS IN TRAINING (not in networks.py but in agent):
+   - Target Q = r₀ + γr₁ + γ²r₂ + γ³V(s₃)
+   - Reduces variance vs 1-step, reduces bias vs Monte Carlo
+   - Implemented via NStepBuffer → PrioritizedReplayBuffer
+
+This architecture enables the agent to learn sophisticated trading strategies that:
+- Detect short-term patterns (CNN)
+- Understand medium-term trends (BiLSTM)
+- Attend to relevant historical regimes (Transformer)
+- Make discrete timing decisions (Action Head)
+- Manage continuous risk (Size Head)
+- Evaluate state-action values accurately (Dueling Critic)

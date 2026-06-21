@@ -1,0 +1,83 @@
+# ============================================================
+#  Advanced RL Trading Agent — MINI Test Configuration
+#  ============================================================
+
+# ── File Paths ──────────────────────────────────────────────
+data:
+  training_data:   "data/trainalt_data.csv"
+  entry_points:    "data/deflection_data.csv"
+  model_save_path: "models/"
+  results_path:    "results/"
+
+# ── Environment ─────────────────────────────────────────────
+environment:
+  max_trade_steps:   5          # Reduced for faster episodes
+  lookback_window:   10         # Reduced for faster processing
+  state_columns:
+    - "log_ret"
+    - "rsi"
+    - "macd"
+  ema_alpha_norm:   0.05
+  initial_tp:       0.02
+  initial_sl:       -0.02
+  tp_sl_width:      0.02
+  slippage_bps:     5
+  transaction_cost: 0.0015
+
+# ── Model Architecture ───────────────────────────────────────
+model:
+  sequence_length:  10          # must match lookback_window
+  hidden_dim:       64          # Much smaller for speed
+  n_heads:          2           # Fewer attention heads
+  n_transformer_layers: 1      # Fewer transformer layers
+  dropout:          0.1
+  action_values: [-0.05,-0.04,-0.03,-0.02,-0.01,0.0,0.01,0.02,0.03,0.04,0.05]  # 11 actions
+
+# ── SAC Hyperparameters ──────────────────────────────────────
+agent:
+  learning_rate:          0.001   # Higher LR for faster learning (testing only)
+  gamma:                  0.95    # Slightly lower discount for shorter episodes
+  tau:                    0.01    # Faster target updates
+  target_entropy_factor:  0.9
+  initial_log_alpha:      -1.6094379124341003   # log(0.2)
+  n_step_returns:         2                      # shorter n-step
+  grad_clip:              1.0
+  update_every:           1
+  updates_per_step:       1
+
+# ── Risk Management ──────────────────────────────────────────
+risk:
+  max_drawdown_limit:    0.25    # Allow more drawdown for testing
+  position_sizing:       true
+  kelly_fraction:        0.5     # Higher Kelly for testing
+  max_position_pct:      0.8     # Higher position limit
+  risk_free_rate:        0.04
+
+# ── Replay Buffer ────────────────────────────────────────────
+replay_buffer:
+  capacity:         1000        # Much smaller buffer
+  per_alpha:        0.6
+  per_beta_start:   0.4
+  per_beta_end:     1.0
+  per_beta_frames:  100       # Very fast beta annealing
+
+# ── Training ─────────────────────────────────────────────────
+training:
+  episodes:         2          # Just 2 episodes
+  batch_size:       32         # Small batch
+  warmup_steps:     20         # Minimal warmup
+  save_frequency:   1          # Save every episode
+  eval_frequency:   1          # Evaluate every episode
+
+# ── Reward Shaping ───────────────────────────────────────────
+reward:
+  type:            "sharpe"
+  window:          10          # Match reduced lookback
+  lambda_entropy:  0.01
+
+# ── Logging ──────────────────────────────────────────────────
+logging:
+  log_level:      "INFO"
+  tensorboard:    false       # Disable for simplicity
+  log_dir:        "logs/"
+  save_plots:     false

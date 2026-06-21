@@ -219,7 +219,7 @@ def backtest(config_path: str, weights_path: str, initial_capital: float = 10_00
     df = pd.DataFrame(trades)
     csv_path = out_dir / "backtest_results.csv"
     df.to_csv(csv_path, index=False)
-    print(f"[Backtest] Results saved → {csv_path}")
+    print(f"[Backtest] Results saved -> {csv_path}")
 
     # ── Equity curve (matplotlib) ────────────────────────────────
     try:
@@ -247,7 +247,7 @@ def backtest(config_path: str, weights_path: str, initial_capital: float = 10_00
         plt.tight_layout()
         fig_path = out_dir / "equity_curve.png"
         plt.savefig(fig_path, dpi=150, bbox_inches="tight")
-        print(f"[Backtest] Equity curve saved → {fig_path}")
+        print(f"[Backtest] Equity curve saved -> {fig_path}")
         plt.close()
     except ImportError:
         print("[Backtest] matplotlib not installed — skipping plot")

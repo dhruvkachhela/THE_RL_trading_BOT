@@ -110,7 +110,7 @@ class TemporalFeatureExtractor(nn.Module):
         Returns:
             features: [batch, hidden_dim]
         """
-        B, T, F = x.shape
+        batch_size, seq_len, _ = x.shape
 
         # Stage 1 — CNN
         xc = x.permute(0, 2, 1)                     # [B, F, T]
@@ -124,13 +124,9 @@ class TemporalFeatureExtractor(nn.Module):
         xl, _ = self.lstm(xc)                        # [B, T, hidden]
         xl = self.lstm_ln(xl)
 
-        # Stage 3 — Transformer with CLS
-        cls = self.cls_token.expand(B, -1, -1)       # [B, 1, hidden]
-        xt = torch.cat([cls, xl], dim=1)             # [B, T+1, hidden]
-        xt = self.pos_enc(xt)
-        xt = self.transformer(xt)                    # [B, T+1, hidden]
-
-        return xt[:, 0, :]                           # CLS token → [B, hidden]
+        # Stage 3 — Temporal pooling (no transformer)
+        feat = xl.mean(dim=1)  # [B, hidden]
+        return feat
 
 
 # ──────────────────────────────────────────────────────────────

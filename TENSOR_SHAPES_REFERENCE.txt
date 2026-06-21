@@ -1,0 +1,166 @@
+TENSOR SHAPES REFERENCE GUIDE
+==============================
+
+This document shows the tensor shapes at each stage of the network for a batch size of 32.
+
+CONFIGURATION (from training_config.yaml):
+- sequence_length: 20 (must match lookback_window)
+- hidden_dim: 256
+- action_values: 17 discrete actions [-0.07 to 0.07 in 0.01 increments]
+- n_heads: 4
+- n_transformer_layers: 2
+- state_dim: 16 features (from state_columns)
+
+INPUT TENSOR SHAPES
+-------------------
+Market data tensor: [Batch, Sequence_Length, Features]
+                  = [32, 20, 16]
+
+TEMPORAL FEATURE EXTRACTOR SHAPES
+---------------------------------
+Input: [32, 20, 16]
+
+Stage 1 - Multi-scale CNN:
+  x = x.permute(0, 2, 1)        → [32, 16, 20]  [B, F, T]
+  c3 = conv3(xc)                → [32, 128, 20] [B, H//2, T] (hidden_dim//2 = 128)
+  c5 = conv5(xc)                → [32, 128, 20] [B, H//2, T]
+  xc = cat([c3, c5], dim=1)     → [32, 256, 20] [B, H, T]
+  xc = conv_drop(conv_ln(xc))   → [32, 256, 20] [B, H, T]
+  xc = xc.permute(0, 2, 1)      → [32, 20, 256] [B, T, H]
+
+Stage 2 - Bidirectional LSTM:
+  lstm(xc)                      → [32, 20, 256] [B, T, H] (hidden_dim from bidir 2×(H//2))
+  xl = lstm_ln(output)          → [32, 20, 256] [B, T, H]
+
+Stage 3 - Transformer Encoder:
+  cls_token.expand              → [32, 1, 256] [B, 1, H]
+  xt = cat([cls, xl], dim=1)    → [32, 21, 256] [B, T+1, H] (+1 for CLS token)
+  xt = pos_enc(xt)              → [32, 21, 256] [B, T+1, H] (same shape!)
+  xt = transformer(xt)          → [32, 21, 256] [B, T+1, H]
+  output = xt[:, 0, :]          → [32, 256] [B, H] (CLS token only)
+
+TEMPORAL FEATURE EXTRACTOR OUTPUT: [32, 256]
+
+ACTOR NETWORK SHAPES
+-------------------
+Input to Actor: [32, 256] (shared features)
+
+Action Head:
+  action_head[0] Linear(256→256) → [32, 256]
+  action_head[1] LayerNorm(256)   → [32, 256]
+  action_head[2] GELU()           → [32, 256]
+  action_head[3] Dropout(0.1)     → [32, 256]
+  action_head[4] Linear(256→17)   → [32, 17]  ← ACTION LOGITS
+
+Size Head (if use_position_sizing=True):
+  size_head[0] Linear(256→128)    → [32, 128] (hidden_dim//2)
+  size_head[1] GELU()             → [32, 128]
+  size_head[2] Linear(128→1)      → [32, 1]
+  size_head[3] Sigmoid()          → [32, 1]   ← POSITION SIZE [0,1]
+
+ACTOR OUTPUT:
+  - logits: [32, 17] (TP/SL displacement)
+  - pos_size: [32, 1] (position size fraction)
+
+CRITIC NETWORK SHAPES
+--------------------
+Input to Critic: [32, 256] (shared features, same as Actor)
+
+Dueling Head:
+  value_stream:
+    Linear(256→256)    → [32, 256]
+    LayerNorm(256)     → [32, 256]
+    GELU()             → [32, 256]
+    Dropout(0.1)       → [32, 256]
+    Linear(256→1)      → [32, 1]    ← STATE VALUE V(s)
+
+  advantage_stream:
+    Linear(256→256)    → [32, 256]
+    LayerNorm(256)     → [32, 256]
+    GELU()             → [32, 256]
+    Dropout(0.1)       → [32, 256]
+    Linear(256→17)     → [32, 17]   ← ACTION ADVANTAGES A(s,a)
+
+  Combining:
+    v = [32, 1]                                    (broadcast to [32, 17])
+    a = [32, 17]
+    q = v + a - a.mean(dim=1, keepdim=True)        → [32, 17]  ← Q-VALUES
+
+CRITIC OUTPUT: [32, 17] (Q-value for each action)
+
+TWIN CRITICS:
+Both critic_1 and critic_2 have identical architecture → each outputs [32, 17]
+Target networks are copies with soft updates
+
+FORWARD PASS SUMMARY:
+====================
+1. Input: [B, 20, 16] market data
+2. Features: [B, 256] from TemporalFeatureExtractor
+3. Actor:
+   - logits: [B, 17] → categorical distribution over TP/SL actions
+   - pos_size: [B, 1] → position size fraction [0,1]
+4. Critic (each):
+   - q_values: [B, 17] → Q-value for each action
+5. Loss computation uses:
+   - Actor: policy gradient loss
+   - Critic: TD loss (Huber) with n-step returns
+   - Alpha: entropy temperature tuning
+
+ENVIRONMENT INTERFACE:
+---------------------
+state = env.reset()  # → [20, 16] numpy array
+state_tensor = torch.FloatTensor(state).unsqueeze(0)  # → [1, 20, 16]
+
+action_value, action_idx, position_size = agent.select_action(state)
+# action_value: float (TP/SL displacement)
+# action_idx: int (0-16 index into action_values)
+# position_size: float [0,1] (fraction of capital)
+
+next_state, reward, done, info = env.step(action_value, position_size)
+# next_state: [20, 16] numpy array or None if episode done
+# reward: float
+# done: bool
+# info: dict with trading metrics
+
+NOTES ON BROADCASTING:
+---------------------
+- When adding positional encoding: [B, T+1, H] + [1, T+1, H] → [B, T+1, H]
+- When computing Q = V + A - mean(A):
+    V: [B, 1] broadcasts to [B, 17]
+    A: [B, 17]
+    mean(A, dim=1, keepdim=True): [B, 1] broadcasts to [B, 17]
+    Result: [B, 17]
+
+- When gathering Q-values for taken actions:
+    q_values: [B, 17]
+    actions: [B, 1] (action indices)
+    q_values.gather(1, actions): [B, 1] (Q-value of taken action)
+
+MEMORY USAGE APPROXIMATION (per forward pass, batch=32):
+---------------------------------------------------------
+TemporalFeatureExtractor:
+  - CNN: ~200K parameters
+  - BiLSTM: ~150K parameters
+  - Transformer: ~500K parameters
+  - CLS token: 256 parameters
+  Total Feature Extractor: ~850K parameters
+
+Actor Network:
+  - Action Head: ~130K parameters
+  - Size Head: ~35K parameters
+  Total Actor: ~165K parameters
+
+Critic Network (each):
+  - Dueling Head: ~260K parameters
+  Two critics: ~520K parameters
+
+Total Network Parameters: ~1.5M parameters
+(Much smaller than vision/NLP transformers due to smaller hidden dimensions)
+
+GRADIENT FLOW:
+-------------
+During backpropagation:
+- Loss gradients flow from Actor/Critic heads
+- Through shared TemporalFeatureExtractor
+- Updates are accumulated and applied via optimizers
+- Gradient clipping applied to prevent exploding norms (max norm=1.0)
