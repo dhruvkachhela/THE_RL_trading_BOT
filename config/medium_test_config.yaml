@@ -59,8 +59,8 @@ agent:
 risk:
   max_drawdown_limit:    0.15
   position_sizing:       true
-  kelly_fraction:        0.25
-  max_position_pct:      0.5
+  kelly_fraction:        0.20
+  max_position_pct:      0.25
   risk_free_rate:        0.04
 
 # ── Replay Buffer ────────────────────────────────────────────

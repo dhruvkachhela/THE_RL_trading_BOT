@@ -298,9 +298,8 @@ class AdvancedTradingEnvironment:
         return ret * pos_size
 
     def _close_trade(self, raw_ret: float, reason: str, pos_size: float) -> None:
-        # Direction-adjusted return after costs
-        adj = raw_ret if self.signal == -1 else -raw_ret
-        adj -= self.transaction_cost
+        # Direction-adjusted return after costs (raw_ret is already direction-adjusted by _calc_ret)
+        adj = raw_ret - self.transaction_cost
 
         # Risk manager update (applies position sizing)
         actual = self.risk.update(adj, pos_size)
